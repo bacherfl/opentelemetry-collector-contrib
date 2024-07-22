@@ -6,6 +6,7 @@ package k8sattributesprocessor // import "github.com/open-telemetry/opentelemetr
 import (
 	"context"
 	"fmt"
+	"golang.org/x/exp/maps"
 	"strconv"
 
 	"go.opentelemetry.io/collector/component"
@@ -209,7 +210,12 @@ func (kp *kubernetesprocessor) addContainerAttributes(attrs pcommon.Map, pod *ku
 			return
 		}
 	default:
-		return
+		// check if this is a pod with only one container. If yes, fall back to the only container within the pod
+		if len(pod.Containers.ByName) == 1 {
+			containerSpec = maps.Values(pod.Containers.ByName)[0]
+		} else {
+			return
+		}
 	}
 	if containerSpec.Name != "" {
 		if _, found := attrs.Get(conventions.AttributeK8SContainerName); !found {

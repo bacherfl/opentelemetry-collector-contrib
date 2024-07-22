@@ -1147,6 +1147,30 @@ func TestProcessorAddContainerAttributes(t *testing.T) {
 			},
 		},
 		{
+			name: "container-id-mismatch",
+			op: func(kp *kubernetesprocessor) {
+				kp.kc.(*fakeClient).Pods[newPodIdentifier("connection", "k8s.pod.ip", "1.1.1.1")] = &kube.Pod{
+					Containers: kube.PodContainers{
+						ByID: map[string]*kube.Container{
+							"767dc30d4fece77038e8ec2585a33471944d0b754659af7aa7e101181418f0dd": {
+								Name:      "app",
+								ImageName: "test/app",
+								ImageTag:  "1.0.1",
+							},
+						},
+					},
+				}
+			},
+			resourceGens: []generateResourceFunc{
+				withPassthroughIP("1.1.1.1"),
+				withContainerID("1"),
+			},
+			wantAttrs: map[string]string{
+				kube.K8sIPLabelName:              "1.1.1.1",
+				conventions.AttributeContainerID: "1",
+			},
+		},
+		{
 			name: "container-run-id-mismatch",
 			op: func(kp *kubernetesprocessor) {
 				kp.kc.(*fakeClient).Pods[newPodIdentifier("connection", "k8s.pod.ip", "1.1.1.1")] = &kube.Pod{
@@ -1172,6 +1196,64 @@ func TestProcessorAddContainerAttributes(t *testing.T) {
 				conventions.AttributeK8SContainerName:         "app",
 				conventions.AttributeK8SContainerRestartCount: "1",
 				conventions.AttributeContainerImageName:       "test/app",
+			},
+		},
+		{
+			name: "fall back to only container",
+			op: func(kp *kubernetesprocessor) {
+				kp.kc.(*fakeClient).Pods[newPodIdentifier("connection", "k8s.pod.ip", "1.1.1.1")] = &kube.Pod{
+					Containers: kube.PodContainers{
+						ByName: map[string]*kube.Container{
+							"app": {
+								ImageName: "test/app",
+								Name:      "app",
+								Statuses: map[int]kube.ContainerStatus{
+									0: {ContainerID: "fcd58c97330c1dc6615bd520031f6a703a7317cd92adc96013c4dd57daad0b5f"},
+								},
+							},
+						},
+					},
+				}
+			},
+			resourceGens: []generateResourceFunc{
+				withPassthroughIP("1.1.1.1"),
+			},
+			wantAttrs: map[string]string{
+				kube.K8sIPLabelName:                     "1.1.1.1",
+				conventions.AttributeK8SContainerName:   "app",
+				conventions.AttributeContainerImageName: "test/app",
+				conventions.AttributeContainerID:        "fcd58c97330c1dc6615bd520031f6a703a7317cd92adc96013c4dd57daad0b5f",
+			},
+		},
+		{
+			name: "no container name or id provided",
+			op: func(kp *kubernetesprocessor) {
+				kp.kc.(*fakeClient).Pods[newPodIdentifier("connection", "k8s.pod.ip", "1.1.1.1")] = &kube.Pod{
+					Containers: kube.PodContainers{
+						ByName: map[string]*kube.Container{
+							"app1": {
+								ImageName: "test/app",
+								Name:      "app",
+								Statuses: map[int]kube.ContainerStatus{
+									0: {ContainerID: "fcd58c97330c1dc6615bd520031f6a703a7317cd92adc96013c4dd57daad0b5f"},
+								},
+							},
+							"app2": {
+								ImageName: "test/app",
+								Name:      "app",
+								Statuses: map[int]kube.ContainerStatus{
+									0: {ContainerID: "fcd58c97330c1dc6615bd520031f6a703a7317cd92adc96013c4dd57daad0b5g"},
+								},
+							},
+						},
+					},
+				}
+			},
+			resourceGens: []generateResourceFunc{
+				withPassthroughIP("1.1.1.1"),
+			},
+			wantAttrs: map[string]string{
+				kube.K8sIPLabelName: "1.1.1.1",
 			},
 		},
 	}
