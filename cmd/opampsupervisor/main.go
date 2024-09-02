@@ -5,12 +5,17 @@ package main
 
 import (
 	"flag"
+	"github.com/open-telemetry/opamp-go/client"
+	"github.com/open-telemetry/opamp-go/server"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/cmd/opampsupervisor/supervisor/commander"
 	"os"
 	"os/signal"
+	"path/filepath"
 
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/cmd/opampsupervisor/supervisor"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/cmd/opampsupervisor/supervisor/config"
 )
 
 func main() {
@@ -19,7 +24,29 @@ func main() {
 
 	logger, _ := zap.NewDevelopment()
 
-	supervisor, err := supervisor.NewSupervisor(logger, *configFlag)
+	cfg, err := config.Load(*configFlag)
+	if err != nil {
+		logger.Error(err.Error())
+		os.Exit(-1)
+		return
+	}
+
+	c, err := commander.NewCommander(
+		logger,
+		cfg.Storage.Directory,
+		cfg.Agent,
+		"--config", filepath.Join(cfg.Storage.Directory, supervisor.AgentConfigFileName),
+	)
+	if err != nil {
+		logger.Error(err.Error())
+		os.Exit(-1)
+		return
+	}
+
+	opampClient := client.NewWebSocket(supervisor.NewLoggerFromZap(logger))
+	opampServer := server.New(supervisor.NewLoggerFromZap(logger))
+
+	supervisor, err := supervisor.NewSupervisor(logger, cfg, c, opampClient, opampServer)
 	if err != nil {
 		logger.Error(err.Error())
 		os.Exit(-1)

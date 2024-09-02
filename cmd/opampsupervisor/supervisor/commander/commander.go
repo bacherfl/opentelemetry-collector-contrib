@@ -18,6 +18,16 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/cmd/opampsupervisor/supervisor/config"
 )
 
+type ICommander interface {
+	Start(ctx context.Context) error
+	Stop(ctx context.Context) error
+	Restart(ctx context.Context) error
+	Exited() <-chan struct{}
+	Pid() int
+	ExitCode() int
+	IsRunning() bool
+}
+
 // Commander can start/stop/restart the Agent executable and also watch for a signal
 // for the Agent process to finish.
 type Commander struct {

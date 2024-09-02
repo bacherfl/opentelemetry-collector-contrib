@@ -16,6 +16,7 @@ require (
 	go.opentelemetry.io/collector/config/configtls v1.14.1
 	go.opentelemetry.io/collector/semconv v0.108.1
 	go.uber.org/goleak v1.3.0
+	go.uber.org/mock v0.4.0
 	go.uber.org/zap v1.27.0
 	golang.org/x/sys v0.24.0
 	google.golang.org/protobuf v1.34.2

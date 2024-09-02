@@ -23,7 +23,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/knadh/koanf/maps"
 	"github.com/knadh/koanf/parsers/yaml"
-	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/providers/rawbytes"
 	"github.com/knadh/koanf/v2"
 	"github.com/open-telemetry/opamp-go/client"
@@ -60,11 +59,19 @@ var (
 )
 
 const (
-	persistentStateFileName = "persistent_state.yaml"
-	agentConfigFileName     = "effective.yaml"
+	PersistentStateFileName = "persistent_state.yaml"
+	AgentConfigFileName     = "effective.yaml"
 )
 
 const maxBufferedCustomMessages = 10
+
+type OpAmpClient interface {
+	client.OpAMPClient
+}
+
+type OpAmpServer interface {
+	server.OpAMPServer
+}
 
 // Supervisor implements supervising of OpenTelemetry Collector and uses OpAMPClient
 // to work with an OpAMP Server.
@@ -73,12 +80,13 @@ type Supervisor struct {
 	pidProvider pidProvider
 
 	// Commander that starts/stops the Agent process.
-	commander *commander.Commander
+	commander commander.ICommander
 
 	startedAt time.Time
 
 	healthCheckTicker  *backoff.Ticker
-	healthChecker      *healthchecker.HTTPHealthChecker
+	healthChecker      healthchecker.HealthChecker
+	healthCheckerFunc  func() healthchecker.HealthChecker
 	lastHealthCheckErr error
 
 	// Supervisor's own config.
@@ -136,9 +144,26 @@ type Supervisor struct {
 	opampServerPort int
 }
 
-func NewSupervisor(logger *zap.Logger, configFile string) (*Supervisor, error) {
+func WithHealthCheckerFunc(hc func() healthchecker.HealthChecker) func(s *Supervisor) {
+	return func(s *Supervisor) {
+		s.healthCheckerFunc = hc
+	}
+}
+
+func NewSupervisor(
+	logger *zap.Logger,
+	cfg config.Supervisor,
+	c commander.ICommander,
+	opAmpClient client.OpAMPClient,
+	opAmpServer server.OpAMPServer,
+	opts ...func(supervisor *Supervisor),
+) (*Supervisor, error) {
 	s := &Supervisor{
 		logger:                       logger,
+		config:                       cfg,
+		commander:                    c,
+		opampClient:                  opAmpClient,
+		opampServer:                  opAmpServer,
 		pidProvider:                  defaultPIDProvider{},
 		hasNewConfig:                 make(chan struct{}, 1),
 		agentConfigOwnMetricsSection: &atomic.Value{},
@@ -149,20 +174,21 @@ func NewSupervisor(logger *zap.Logger, configFile string) (*Supervisor, error) {
 		customMessageToServer:        make(chan *protobufs.CustomMessage, maxBufferedCustomMessages),
 		agentConn:                    &atomic.Value{},
 	}
+
+	s.healthCheckerFunc = func() healthchecker.HealthChecker {
+		return healthchecker.NewHTTPHealthChecker(fmt.Sprintf("http://%s", s.agentHealthCheckEndpoint))
+	}
+
 	if err := s.createTemplates(); err != nil {
 		return nil, err
 	}
 
-	if err := s.loadConfig(configFile); err != nil {
-		return nil, fmt.Errorf("error loading config: %w", err)
-	}
-
-	if err := s.config.Validate(); err != nil {
-		return nil, fmt.Errorf("error validating config: %w", err)
-	}
-
 	if err := os.MkdirAll(s.config.Storage.Directory, 0700); err != nil {
 		return nil, fmt.Errorf("error creating storage dir: %w", err)
+	}
+
+	for _, opt := range opts {
+		opt(s)
 	}
 
 	return s, nil
@@ -199,21 +225,13 @@ func (s *Supervisor) Start() error {
 		return fmt.Errorf("cannot start OpAMP client: %w", err)
 	}
 
-	s.commander, err = commander.NewCommander(
-		s.logger,
-		s.config.Storage.Directory,
-		s.config.Agent,
-		"--config", s.agentConfigFilePath(),
-	)
-	if err != nil {
-		return err
-	}
-
 	s.startHealthCheckTicker()
 
 	s.agentWG.Add(1)
 	go func() {
-		defer s.agentWG.Done()
+		defer func() {
+			s.agentWG.Done()
+		}()
 		s.runAgentProcess()
 	}()
 
@@ -245,28 +263,6 @@ func (s *Supervisor) createTemplates() error {
 	return nil
 }
 
-func (s *Supervisor) loadConfig(configFile string) error {
-	if configFile == "" {
-		return errors.New("path to config file cannot be empty")
-	}
-
-	k := koanf.New("::")
-	if err := k.Load(file.Provider(configFile), yaml.Parser()); err != nil {
-		return err
-	}
-
-	decodeConf := koanf.UnmarshalConf{
-		Tag: "mapstructure",
-	}
-
-	s.config = config.DefaultSupervisor()
-	if err := k.UnmarshalWithConf("", &s.config, decodeConf); err != nil {
-		return fmt.Errorf("cannot parse %v: %w", configFile, err)
-	}
-
-	return nil
-}
-
 // getBootstrapInfo obtains the Collector's agent description by
 // starting a Collector with a specific config that only starts
 // an OpAMP extension, obtains the agent description, then
@@ -288,14 +284,14 @@ func (s *Supervisor) getBootstrapInfo() (err error) {
 		return fmt.Errorf("failed to write agent config: %w", err)
 	}
 
-	srv := server.New(newLoggerFromZap(s.logger))
+	//srv := server.New(NewLoggerFromZap(s.logger))
 
 	done := make(chan error, 1)
 	var connected atomic.Bool
 
 	// Start a one-shot server to get the Collector's agent description
 	// using the Collector's OpAMP extension.
-	err = srv.Start(flattenedSettings{
+	err = s.opampServer.Start(flattenedSettings{
 		endpoint: fmt.Sprintf("localhost:%d", s.opampServerPort),
 		onConnectingFunc: func(_ *http.Request) (bool, int) {
 			connected.Store(true)
@@ -336,27 +332,17 @@ func (s *Supervisor) getBootstrapInfo() (err error) {
 	}
 
 	defer func() {
-		if stopErr := srv.Stop(context.Background()); stopErr != nil {
+		if stopErr := s.opampServer.Stop(context.Background()); stopErr != nil {
 			err = errors.Join(err, fmt.Errorf("error when stopping the opamp server: %w", stopErr))
 		}
 	}()
 
-	cmd, err := commander.NewCommander(
-		s.logger,
-		s.config.Storage.Directory,
-		s.config.Agent,
-		"--config", s.agentConfigFilePath(),
-	)
-	if err != nil {
-		return err
-	}
-
-	if err = cmd.Start(context.Background()); err != nil {
+	if err = s.commander.Start(context.Background()); err != nil {
 		return err
 	}
 
 	defer func() {
-		if stopErr := cmd.Stop(context.Background()); stopErr != nil {
+		if stopErr := s.commander.Stop(context.Background()); stopErr != nil {
 			err = errors.Join(err, fmt.Errorf("error when stopping the collector: %w", stopErr))
 		}
 	}()
@@ -387,7 +373,6 @@ func (s *Supervisor) startOpAMP() error {
 }
 
 func (s *Supervisor) startOpAMPClient() error {
-	s.opampClient = client.NewWebSocket(newLoggerFromZap(s.logger))
 
 	tlsConfig, err := s.config.Server.TLSSetting.LoadTLSConfig(context.Background())
 	if err != nil {
@@ -457,8 +442,6 @@ func (s *Supervisor) startOpAMPClient() error {
 // depending on information received by the Supervisor from the remote
 // OpAMP server.
 func (s *Supervisor) startOpAMPServer() error {
-	s.opampServer = server.New(newLoggerFromZap(s.logger))
-
 	s.logger.Debug("Starting OpAMP server...")
 
 	connected := &atomic.Bool{}
@@ -987,7 +970,7 @@ func (s *Supervisor) startAgent() {
 	s.startedAt = time.Now()
 	s.startHealthCheckTicker()
 
-	s.healthChecker = healthchecker.NewHTTPHealthChecker(fmt.Sprintf("http://%s", s.agentHealthCheckEndpoint))
+	s.healthChecker = s.healthCheckerFunc()
 }
 
 func (s *Supervisor) startHealthCheckTicker() {
@@ -1052,7 +1035,8 @@ func (s *Supervisor) runAgentProcess() {
 		s.startAgent()
 	}
 
-	restartTimer := time.NewTimer(0)
+	restartTimer := time.NewTimer(5 * time.Second)
+	// TODO calling Stop here does not necessarily prevent the timer from being fired and thus triggering a restart
 	restartTimer.Stop()
 
 	for {
@@ -1310,11 +1294,11 @@ func (s *Supervisor) processAgentIdentificationMessage(msg *protobufs.AgentIdent
 }
 
 func (s *Supervisor) persistentStateFilePath() string {
-	return filepath.Join(s.config.Storage.Directory, persistentStateFileName)
+	return filepath.Join(s.config.Storage.Directory, PersistentStateFileName)
 }
 
 func (s *Supervisor) agentConfigFilePath() string {
-	return filepath.Join(s.config.Storage.Directory, agentConfigFileName)
+	return filepath.Join(s.config.Storage.Directory, AgentConfigFileName)
 }
 
 func (s *Supervisor) findRandomPort() (int, error) {
