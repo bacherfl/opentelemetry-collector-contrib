@@ -144,6 +144,71 @@ func Test_flatten(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "zero depth",
+			target: map[string]any{
+				"0": []any{
+					map[string]any{
+						"1": map[string]any{
+							"2": "value",
+						},
+					},
+				},
+			},
+			prefix: ottl.Optional[string]{},
+			depth:  ottl.NewTestingOptional[int64](0),
+			expected: map[string]any{
+				"0": []any{
+					map[string]any{
+						"1": map[string]any{
+							"2": "value",
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "slice with nested objects",
+			target: map[string]any{
+				"things": []any{
+					map[string]any{
+						"key1": map[string]any{
+							"key2": "value",
+						},
+					},
+				},
+			},
+			prefix: ottl.Optional[string]{},
+			depth:  ottl.Optional[int64]{},
+			expected: map[string]any{
+				"things.0.key1.key2": "value",
+			},
+		},
+		{
+			name: "slice of slices",
+			target: map[string]any{
+				"things": []any{
+					[]any{"i1", "i2"},
+					[]any{
+						map[string]any{
+							"foo": "bar",
+						},
+					},
+					[]any{
+						[]any{"j1", "j2"},
+					},
+				},
+			},
+			prefix: ottl.Optional[string]{},
+			depth:  ottl.Optional[int64]{},
+			expected: map[string]any{
+				"things.0.0":     "i1",
+				"things.0.1":     "i2",
+				"things.1.0.foo": "bar",
+				"things.2.0.0":   "j1",
+				"things.2.0.1":   "j1",
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -54,28 +54,58 @@ func flatten[K any](target ottl.PMapGetter[K], p ottl.Optional[string], d ottl.O
 		}
 
 		result := pcommon.NewMap()
-		flattenHelper(m, result, prefix, 0, depth)
+		flattenMap(m, result, prefix, 0, depth)
 		result.MoveTo(m)
 
 		return nil, nil
 	}, nil
 }
 
-func flattenHelper(m pcommon.Map, result pcommon.Map, prefix string, currentDepth, maxDepth int64) {
+func flattenMap(m pcommon.Map, result pcommon.Map, prefix string, currentDepth, maxDepth int64) {
 	if len(prefix) > 0 {
 		prefix += "."
 	}
+
 	m.Range(func(k string, v pcommon.Value) bool {
 		switch {
 		case v.Type() == pcommon.ValueTypeMap && currentDepth < maxDepth:
-			flattenHelper(v.Map(), result, prefix+k, currentDepth+1, maxDepth)
-		case v.Type() == pcommon.ValueTypeSlice:
+			flattenMap(v.Map(), result, prefix+k, currentDepth+1, maxDepth)
+		case v.Type() == pcommon.ValueTypeSlice && currentDepth < maxDepth:
 			for i := 0; i < v.Slice().Len(); i++ {
-				v.Slice().At(i).CopyTo(result.PutEmpty(fmt.Sprintf("%v.%v", prefix+k, i)))
+				var key string
+				if currentDepth == 0 {
+					key = fmt.Sprintf("%v.%v", prefix+k, i)
+				} else {
+					key = fmt.Sprintf("%v.%v", k, i)
+				}
+				elem := v.Slice().At(i)
+				switch {
+				case elem.Type() == pcommon.ValueTypeMap:
+					flattenMap(elem.Map(), result, key, currentDepth+1, maxDepth)
+				case elem.Type() == pcommon.ValueTypeSlice:
+					flattenSlice(elem.Slice(), result, key, currentDepth+1, maxDepth)
+				default:
+					v.Slice().At(i).CopyTo(result.PutEmpty(key))
+				}
 			}
 		default:
 			v.CopyTo(result.PutEmpty(prefix + k))
 		}
 		return true
 	})
+}
+
+func flattenSlice(s pcommon.Slice, result pcommon.Map, key string, currentDepth, maxDepth int64) {
+	for i := 0; i < s.Len(); i++ {
+		key := fmt.Sprintf("%v.%v", key, i)
+		elem := s.At(i)
+		switch {
+		case elem.Type() == pcommon.ValueTypeMap:
+			flattenMap(elem.Map(), result, key, currentDepth+1, maxDepth)
+		case elem.Type() == pcommon.ValueTypeSlice:
+			flattenSlice(elem.Slice(), result, key, currentDepth+1, maxDepth)
+		default:
+			s.At(i).CopyTo(result.PutEmpty(key))
+		}
+	}
 }
