@@ -6,8 +6,19 @@ package supervisor
 import (
 	"bytes"
 	"context"
+	"errors"
+	"github.com/open-telemetry/opamp-go/server"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/cmd/opampsupervisor/supervisor/commander/mock"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/cmd/opampsupervisor/supervisor/healthchecker"
+	mock3 "github.com/open-telemetry/opentelemetry-collector-contrib/cmd/opampsupervisor/supervisor/healthchecker/mock"
+	mock2 "github.com/open-telemetry/opentelemetry-collector-contrib/cmd/opampsupervisor/supervisor/mock"
+	"go.opentelemetry.io/collector/config/configopaque"
+	semconv "go.opentelemetry.io/collector/semconv/v1.27.0"
+	"go.uber.org/mock/gomock"
 	"net"
+	"net/http"
 	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -106,7 +117,7 @@ func Test_onMessage(t *testing.T) {
 			agentConfigOwnMetricsSection: &atomic.Value{},
 			effectiveConfig:              &atomic.Value{},
 			agentHealthCheckEndpoint:     "localhost:8000",
-			opampClient:                  client.NewHTTP(newLoggerFromZap(zap.NewNop())),
+			opampClient:                  client.NewHTTP(NewLoggerFromZap(zap.NewNop())),
 		}
 
 		s.onMessage(context.Background(), &types.MessageData{
@@ -409,4 +420,409 @@ func (m mockConn) Send(ctx context.Context, message *protobufs.ServerToAgent) er
 }
 func (mockConn) Disconnect() error {
 	return nil
+}
+
+func TestSupervisor_StartAndShutdown(t *testing.T) {
+
+	ctrl := gomock.NewController(t)
+
+	mockCommander := mock.NewMockICommander(ctrl)
+	mockOpampClient := mock2.NewMockOpAmpClient(ctrl)
+	mockOpAmpServer := mock2.NewMockOpAmpServer(ctrl)
+	mockHealthChecker := mock3.NewMockHealthChecker(ctrl)
+
+	s, err := setupTestSupervisor(t, mockCommander, mockOpampClient, mockOpAmpServer, mockHealthChecker, func(_ context.Context, _ types.StartSettings) error {
+		return nil
+	}, nil)
+
+	err = s.Start()
+	require.NoError(t, err)
+
+	// eventually the internal representation of the agent state should be updated
+	require.Eventually(t, func() bool {
+		return s.agentHasStarted
+	}, 10*time.Second, 1*time.Second)
+
+	s.Shutdown()
+}
+
+func TestSupervisor_StartAndReceiveMessage(t *testing.T) {
+
+	ctrl := gomock.NewController(t)
+
+	mockCommander := mock.NewMockICommander(ctrl)
+	mockOpampClient := mock2.NewMockOpAmpClient(ctrl)
+	mockOpAmpServer := mock2.NewMockOpAmpServer(ctrl)
+	mockHealthChecker := mock3.NewMockHealthChecker(ctrl)
+
+	const testConfigMessage = `receivers:
+  debug:`
+
+	s, err := setupTestSupervisor(t, mockCommander, mockOpampClient, mockOpAmpServer, mockHealthChecker, func(_ context.Context, css types.StartSettings) error {
+		css.Callbacks.OnConnect(context.Background())
+		css.Callbacks.OnMessage(context.Background(), &types.MessageData{
+			RemoteConfig: &protobufs.AgentRemoteConfig{
+				Config: &protobufs.AgentConfigMap{
+					ConfigMap: map[string]*protobufs.AgentConfigFile{
+						"": {
+							Body: []byte(testConfigMessage),
+						},
+					},
+				},
+				ConfigHash: []byte("hash"),
+			},
+		})
+		return nil
+	}, nil)
+
+	// expect the client status to be updated with the latest applied config hash
+	mockOpampClient.
+		EXPECT().
+		SetRemoteConfigStatus(
+			gomock.AssignableToTypeOf(&protobufs.RemoteConfigStatus{}),
+		).
+		DoAndReturn(func(status *protobufs.RemoteConfigStatus) error {
+			require.Equal(t, []byte("hash"), status.LastRemoteConfigHash)
+			require.Equal(t, protobufs.RemoteConfigStatuses_RemoteConfigStatuses_APPLIED, status.Status)
+			return nil
+		})
+
+	// expect the config to be updated
+	mockOpampClient.
+		EXPECT().
+		UpdateEffectiveConfig(
+			gomock.Any(),
+		).
+		Return(nil)
+
+	// expect an additional restart of the commander
+	mockCommander.EXPECT().Start(gomock.Any()).Return(nil)
+	mockCommander.EXPECT().Stop(gomock.Any()).Return(nil)
+
+	err = s.Start()
+	require.NoError(t, err)
+
+	// eventually the internal representation of the agent state should be updated
+	require.Eventually(t, func() bool {
+		return s.agentHasStarted
+	}, 10*time.Second, 1*time.Second)
+
+	s.Shutdown()
+
+	// verify the merged config being stored
+
+	fileContent, err := os.ReadFile(filepath.Join(s.config.Storage.Directory, lastRecvRemoteConfigFile))
+	require.NoError(t, err)
+	require.Contains(t, string(fileContent), testConfigMessage)
+}
+
+func TestSupervisor_StartAndReceiveOpAmpConnectionSettings(t *testing.T) {
+
+	const certPEM = `
+-----BEGIN CERTIFICATE-----
+MIIDujCCAqKgAwIBAgIIE31FZVaPXTUwDQYJKoZIhvcNAQEFBQAwSTELMAkGA1UE
+BhMCVVMxEzARBgNVBAoTCkdvb2dsZSBJbmMxJTAjBgNVBAMTHEdvb2dsZSBJbnRl
+cm5ldCBBdXRob3JpdHkgRzIwHhcNMTQwMTI5MTMyNzQzWhcNMTQwNTI5MDAwMDAw
+WjBpMQswCQYDVQQGEwJVUzETMBEGA1UECAwKQ2FsaWZvcm5pYTEWMBQGA1UEBwwN
+TW91bnRhaW4gVmlldzETMBEGA1UECgwKR29vZ2xlIEluYzEYMBYGA1UEAwwPbWFp
+bC5nb29nbGUuY29tMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEfRrObuSW5T7q
+5CnSEqefEmtH4CCv6+5EckuriNr1CjfVvqzwfAhopXkLrq45EQm8vkmf7W96XJhC
+7ZM0dYi1/qOCAU8wggFLMB0GA1UdJQQWMBQGCCsGAQUFBwMBBggrBgEFBQcDAjAa
+BgNVHREEEzARgg9tYWlsLmdvb2dsZS5jb20wCwYDVR0PBAQDAgeAMGgGCCsGAQUF
+BwEBBFwwWjArBggrBgEFBQcwAoYfaHR0cDovL3BraS5nb29nbGUuY29tL0dJQUcy
+LmNydDArBggrBgEFBQcwAYYfaHR0cDovL2NsaWVudHMxLmdvb2dsZS5jb20vb2Nz
+cDAdBgNVHQ4EFgQUiJxtimAuTfwb+aUtBn5UYKreKvMwDAYDVR0TAQH/BAIwADAf
+BgNVHSMEGDAWgBRK3QYWG7z2aLV29YG2u2IaulqBLzAXBgNVHSAEEDAOMAwGCisG
+AQQB1nkCBQEwMAYDVR0fBCkwJzAloCOgIYYfaHR0cDovL3BraS5nb29nbGUuY29t
+L0dJQUcyLmNybDANBgkqhkiG9w0BAQUFAAOCAQEAH6RYHxHdcGpMpFE3oxDoFnP+
+gtuBCHan2yE2GRbJ2Cw8Lw0MmuKqHlf9RSeYfd3BXeKkj1qO6TVKwCh+0HdZk283
+TZZyzmEOyclm3UGFYe82P/iDFt+CeQ3NpmBg+GoaVCuWAARJN/KfglbLyyYygcQq
+0SgeDh8dRKUiaW3HQSoYvTvdTuqzwK4CXsr3b5/dAOY8uMuG/IAR3FgwTbZ1dtoW
+RvOTa8hYiU6A475WuZKyEHcwnGYe57u2I2KbMgcKjPniocj4QzgYsVAVKW3IwaOh
+yE+vPxsiUkvQHdO2fojCkY8jg70jxM+gu59tPDNbw3Uh/2Ij310FgTHsnGQMyA==
+-----END CERTIFICATE-----`
+
+	ctrl := gomock.NewController(t)
+
+	mockCommander := mock.NewMockICommander(ctrl)
+	mockOpampClient := mock2.NewMockOpAmpClient(ctrl)
+	mockOpAmpServer := mock2.NewMockOpAmpServer(ctrl)
+	mockHealthChecker := mock3.NewMockHealthChecker(ctrl)
+
+	waitForShutdown := make(chan struct{})
+
+	sendOpAmpConnectionSettings := make(chan struct{})
+	s, err := setupTestSupervisor(t, mockCommander, mockOpampClient, mockOpAmpServer, mockHealthChecker, func(_ context.Context, css types.StartSettings) error {
+		css.Callbacks.OnConnect(context.Background())
+		go func() {
+			<-sendOpAmpConnectionSettings
+			_ = css.Callbacks.OnOpampConnectionSettings(
+				context.Background(),
+				&protobufs.OpAMPConnectionSettings{
+					DestinationEndpoint: "https://localhost:1234",
+					Headers: &protobufs.Headers{
+						Headers: []*protobufs.Header{
+							{
+								Key:   "foo",
+								Value: "bar",
+							},
+						},
+					},
+					Certificate: &protobufs.TLSCertificate{
+						CaPublicKey: []byte(certPEM),
+					},
+				},
+			)
+		}()
+
+		return nil
+	}, func(mockOpampClient *mock2.MockOpAmpClient) {
+		mockOpampClient.EXPECT().SetAgentDescription(gomock.Any()).Return(nil)
+		mockOpampClient.EXPECT().Stop(gomock.Any()).Return(nil)
+		mockOpampClient.
+			EXPECT().
+			Start(
+				gomock.Any(),
+				gomock.AssignableToTypeOf(types.StartSettings{}),
+			).
+			DoAndReturn(func(ctx context.Context, css types.StartSettings) error {
+				require.Equal(t, http.Header{"Foo": []string{"bar"}}, css.Header)
+				require.Equal(t, "https://localhost:1234", css.OpAMPServerURL)
+				go func() {
+					waitForShutdown <- struct{}{}
+				}()
+				return nil
+			})
+
+		mockOpampClient.EXPECT().SetHealth(gomock.Any()).DoAndReturn(func(health *protobufs.ComponentHealth) error {
+			require.False(t, health.Healthy)
+			return nil
+		})
+	})
+
+	err = s.Start()
+	require.NoError(t, err)
+
+	// eventually the internal representation of the agent state should be updated
+	require.Eventually(t, func() bool {
+		return s.agentHasStarted
+	}, 10*time.Second, 1*time.Second)
+
+	sendOpAmpConnectionSettings <- struct{}{}
+
+	// eventually the updated opampConnectionSettings should be applied
+	require.Eventually(t, func() bool {
+		// wait for one property to be updated - the remaining ones can be checked outside the Eventually function
+		return s.config.Server.Endpoint == "https://localhost:1234"
+	}, 10*time.Second, 1*time.Second)
+
+	require.Equal(t, http.Header{
+		"Foo": []string{"bar"},
+	}, s.config.Server.Headers)
+	require.Equal(t, configopaque.String("[REDACTED]").String(), s.config.Server.TLSSetting.CAPem.String())
+
+	<-waitForShutdown
+	s.Shutdown()
+}
+
+func TestSupervisor_StartAndReceiveRestartCommand(t *testing.T) {
+
+	ctrl := gomock.NewController(t)
+
+	mockCommander := mock.NewMockICommander(ctrl)
+	mockOpampClient := mock2.NewMockOpAmpClient(ctrl)
+	mockOpAmpServer := mock2.NewMockOpAmpServer(ctrl)
+	mockHealthChecker := mock3.NewMockHealthChecker(ctrl)
+
+	s, err := setupTestSupervisor(t, mockCommander, mockOpampClient, mockOpAmpServer, mockHealthChecker, func(_ context.Context, css types.StartSettings) error {
+		css.Callbacks.OnConnect(context.Background())
+		css.Callbacks.OnCommand(context.Background(), &protobufs.ServerToAgentCommand{
+			Type: protobufs.CommandType_CommandType_Restart,
+		})
+		return nil
+	}, nil)
+
+	// expect an additional restart of the commander
+	mockCommander.EXPECT().Restart(gomock.Any()).Return(nil)
+
+	err = s.Start()
+	require.NoError(t, err)
+
+	// eventually the internal representation of the agent state should be updated
+	require.Eventually(t, func() bool {
+		return s.agentHasStarted
+	}, 10*time.Second, 1*time.Second)
+
+	s.Shutdown()
+}
+
+func setupTestSupervisor(t *testing.T, mockCommander *mock.MockICommander, mockOpampClient *mock2.MockOpAmpClient, mockOpAmpServer *mock2.MockOpAmpServer, mockHealthChecker *mock3.MockHealthChecker, clientBehavior func(_ context.Context, css types.StartSettings) error, clientExpectationsAfterStart func(ampClient *mock2.MockOpAmpClient)) (*Supervisor, error) {
+	tmpDir := t.TempDir()
+
+	cfg := config.Supervisor{
+		Server:       config.OpAMPServer{},
+		Agent:        config.Agent{},
+		Capabilities: config.Capabilities{},
+		Storage: config.Storage{
+			Directory: tmpDir,
+		},
+	}
+	s, err := NewSupervisor(
+		zap.NewNop(),
+		cfg,
+		mockCommander,
+		mockOpampClient,
+		mockOpAmpServer,
+		WithHealthCheckerFunc(func() healthchecker.HealthChecker {
+			return mockHealthChecker
+		}),
+	)
+
+	require.NoError(t, err)
+
+	// Set up the expectations for components included by the supervisor
+
+	// =======================================
+	// Opamp Client
+	// =======================================
+
+	// Expect the client to start
+	// this assertion can be a lot more detailed with the start settings being evaluated
+	mockOpampClient.
+		EXPECT().
+		Start(
+			gomock.Any(),
+			gomock.AssignableToTypeOf(types.StartSettings{}),
+		).
+		DoAndReturn(func(ctx context.Context, css types.StartSettings) error {
+			return clientBehavior(ctx, css)
+		})
+
+	// the Agent description of the client should be set
+	mockOpampClient.
+		EXPECT().
+		SetAgentDescription(
+			gomock.Any(),
+		).
+		DoAndReturn(func(ad *protobufs.AgentDescription) error {
+			require.NotNil(t, ad)
+			return nil
+		})
+
+	// The health of the client will be set multiple times:
+
+	// Set health to false during start up
+	mockOpampClient.
+		EXPECT().
+		SetHealth(gomock.Any()).
+		DoAndReturn(func(ch *protobufs.ComponentHealth) error {
+			require.False(t, ch.Healthy)
+			return nil
+		}).Times(2)
+
+	// after all components have been started, the health should eventually be set to true
+	mockOpampClient.
+		EXPECT().
+		SetHealth(gomock.Any()).
+		DoAndReturn(func(ch *protobufs.ComponentHealth) error {
+			require.True(t, ch.Healthy)
+			return nil
+		})
+
+	if clientExpectationsAfterStart != nil {
+		clientExpectationsAfterStart(mockOpampClient)
+	}
+
+	// AFTER SHUTDOWN
+
+	// Set health to false during shutdown
+	mockOpampClient.
+		EXPECT().
+		SetHealth(gomock.Any()).
+		DoAndReturn(func(ch *protobufs.ComponentHealth) error {
+			require.False(t, ch.Healthy)
+			return nil
+		})
+
+	// The client should be stopped upon shutdown
+	mockOpampClient.
+		EXPECT().
+		Stop(gomock.Any()).
+		Return(nil)
+
+	// =======================================
+	// Opamp Server
+	// =======================================
+
+	// The Opamp Server should be started two times:
+	// 1. When obtaining the bootstrap info
+	// 2. When starting the long-lived server
+	mockOpAmpServer.
+		EXPECT().
+		Start(gomock.Any()).
+		DoAndReturn(func(settings server.StartSettings) error {
+			connectionResponse := settings.Callbacks.OnConnecting(&http.Request{})
+			connectionResponse.ConnectionCallbacks.OnMessage(
+				context.TODO(),
+				&mockConn{},
+				&protobufs.AgentToServer{
+					AgentDescription: &protobufs.AgentDescription{
+						IdentifyingAttributes: []*protobufs.KeyValue{
+							{
+								Key:   semconv.AttributeServiceInstanceID,
+								Value: &protobufs.AnyValue{Value: &protobufs.AnyValue_StringValue{StringValue: s.persistentState.InstanceID.String()}},
+							},
+						},
+					},
+				},
+			)
+			return nil
+		}).Times(2)
+
+	// Upon Shutdown of the supervisor the Opamp server should be stopped as well
+	mockOpAmpServer.
+		EXPECT().
+		Stop(gomock.Any()).
+		Return(nil).
+		Times(2)
+
+	// =======================================
+	// Commander
+	// =======================================
+
+	// The Commander should be started two times:
+	// 1. When obtaining the bootstrap info
+	// 2. When starting the long-lived agent process
+	mockCommander.
+		EXPECT().
+		Start(
+			gomock.Any(),
+		).
+		Times(2).
+		Return(nil)
+
+	// Upon Shutdown of the supervisor the Commander should be stopped as well
+	mockCommander.
+		EXPECT().
+		Stop(
+			gomock.Any(),
+		).
+		Return(nil).
+		Times(2)
+
+	ch := make(chan struct{})
+	mockCommander.EXPECT().Exited().DoAndReturn(func() <-chan struct{} {
+		return ch
+	}).AnyTimes()
+
+	mockCommander.EXPECT().IsRunning().Return(true).AnyTimes()
+
+	// return an error on the first health check
+	mockHealthChecker.EXPECT().Check(gomock.Any()).Return(errors.New("not ready"))
+	// on the second check, simulate an up and running agent process
+	// TODO: The health of the client seems to only be set to true if there was at least one
+	// error during the health checks before - this likely means that if the agent starts too fast the
+	// internal state will not be set properly
+	mockHealthChecker.EXPECT().Check(gomock.Any()).Return(nil).AnyTimes()
+	return s, err
 }

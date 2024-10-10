@@ -10,6 +10,10 @@ import (
 	"time"
 )
 
+type HealthChecker interface {
+	Check(ctx context.Context) error
+}
+
 // TODO: Support more settings
 // https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/23344
 type HTTPHealthChecker struct {

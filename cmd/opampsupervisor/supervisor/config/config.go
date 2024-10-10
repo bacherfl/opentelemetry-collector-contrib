@@ -6,6 +6,9 @@ package config
 import (
 	"errors"
 	"fmt"
+	"github.com/knadh/koanf/parsers/yaml"
+	"github.com/knadh/koanf/providers/file"
+	"github.com/knadh/koanf/v2"
 	"net/http"
 	"net/url"
 	"os"
@@ -16,6 +19,33 @@ import (
 	"github.com/open-telemetry/opamp-go/protobufs"
 	"go.opentelemetry.io/collector/config/configtls"
 )
+
+// Load loads the Supervisor config from a file.
+func Load(configFile string) (Supervisor, error) {
+	if configFile == "" {
+		return Supervisor{}, errors.New("path to config file cannot be empty")
+	}
+
+	k := koanf.New("::")
+	if err := k.Load(file.Provider(configFile), yaml.Parser()); err != nil {
+		return Supervisor{}, err
+	}
+
+	decodeConf := koanf.UnmarshalConf{
+		Tag: "mapstructure",
+	}
+
+	cfg := DefaultSupervisor()
+	if err := k.UnmarshalWithConf("", &cfg, decodeConf); err != nil {
+		return Supervisor{}, fmt.Errorf("cannot parse %v: %w", configFile, err)
+	}
+
+	if err := cfg.Validate(); err != nil {
+		return Supervisor{}, err
+	}
+
+	return cfg, nil
+}
 
 // Supervisor is the Supervisor config file format.
 type Supervisor struct {
