@@ -23,6 +23,7 @@ type Entry struct {
 	TraceFlags        []byte         `json:"trace_flags,omitempty"   yaml:"trace_flags,omitempty"`
 	Severity          Severity       `json:"severity"                yaml:"severity"`
 	ScopeName         string         `json:"scope_name"              yaml:"scope_name"`
+	ScopeVersion      string         `json:"scope_version"              yaml:"scope_version"`
 }
 
 // New will create a new log entry with current timestamp and an empty body.

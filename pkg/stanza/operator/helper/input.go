@@ -46,9 +46,10 @@ func (c InputConfig) Build(set component.TelemetrySettings) (InputOperator, erro
 	}
 
 	inputOperator := InputOperator{
-		Attributer:     attributer,
-		Identifier:     identifier,
-		WriterOperator: writerOperator,
+		Attributer:           attributer,
+		Identifier:           identifier,
+		WriterOperator:       writerOperator,
+		InstrumentationScope: NewInstrumentationScope(set),
 	}
 
 	return inputOperator, nil
@@ -59,6 +60,7 @@ type InputOperator struct {
 	Attributer
 	Identifier
 	WriterOperator
+	InstrumentationScope
 }
 
 // NewEntry will create a new entry using the `attributes`, and `resource` configuration.
@@ -73,6 +75,8 @@ func (i *InputOperator) NewEntry(value any) (*entry.Entry, error) {
 	if err := i.Identify(entry); err != nil {
 		return nil, errors.Wrap(err, "add resource keys to entry")
 	}
+
+	i.AddInstrumentationScope(entry)
 
 	return entry, nil
 }

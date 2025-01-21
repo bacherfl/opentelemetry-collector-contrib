@@ -38,6 +38,7 @@ func ConvertEntries(entries []*entry.Entry) plog.Logs {
 			scopeIdxByResource[resourceID] = map[string]int{e.ScopeName: 0}
 			sl = rl.ScopeLogs().AppendEmpty()
 			sl.Scope().SetName(e.ScopeName)
+			sl.Scope().SetVersion(e.ScopeVersion)
 		} else {
 			rl = pLogs.ResourceLogs().At(resourceIdx)
 			scopeIdxInResource, ok := scopeIdxByResource[resourceID][e.ScopeName]
@@ -45,6 +46,7 @@ func ConvertEntries(entries []*entry.Entry) plog.Logs {
 				scopeIdxByResource[resourceID][e.ScopeName] = rl.ScopeLogs().Len()
 				sl = rl.ScopeLogs().AppendEmpty()
 				sl.Scope().SetName(e.ScopeName)
+				sl.Scope().SetVersion(e.ScopeVersion)
 			} else {
 				sl = pLogs.ResourceLogs().At(resourceIdx).ScopeLogs().At(scopeIdxInResource)
 			}

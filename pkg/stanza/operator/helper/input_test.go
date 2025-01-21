@@ -121,6 +121,10 @@ func TestInputOperatorNewEntry(t *testing.T) {
 				set:          set,
 			},
 		},
+		InstrumentationScope: InstrumentationScope{
+			Name:    "my-scope",
+			Version: "v1.0.0",
+		},
 	}
 
 	entry, err := input.NewEntry("test")
@@ -137,4 +141,7 @@ func TestInputOperatorNewEntry(t *testing.T) {
 	resourceValue, exists := entry.Resource["resource-key"]
 	require.True(t, exists)
 	require.Equal(t, "resource", resourceValue)
+
+	require.Equal(t, "my-scope", entry.ScopeName)
+	require.Equal(t, "v1.0.0", entry.ScopeVersion)
 }
