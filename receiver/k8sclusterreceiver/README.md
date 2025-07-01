@@ -60,6 +60,9 @@ The following allocatable resource types are available.
   - ephemeral-storage
   - storage
   - pods
+  Note that with the introduction of the `receiver.k8scluster.enableNewAllocatableMetrics` feature flag, the metrics for the allocatable resource types
+  (`k8s.node.allocatable.cpu`, `k8s.node.allocatable.ephemeral_storage`, `k8s.node.allocatable.memory`, `k8s.node.allocatable.pods`) are enabled/disabled via the metrics section, and are represented by up/down counters, rather than gauges.
+  To activate the feature flag, start the collector with `--feature-gates receiver.k8scluster.enableNewAllocatableMetrics`.
 - `metrics`: Allows to enable/disable metrics.
 - `resource_attributes`: Allows to enable/disable resource attributes.
 - `namespace`: Allows to observe resources for a particular namespace only. If this option is set to a non-empty string, `Nodes`, `Namespaces` and `ClusterResourceQuotas` will not be observed. 

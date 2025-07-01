@@ -7,6 +7,7 @@ import (
 	"time"
 
 	quotav1 "github.com/openshift/api/quota/v1"
+	"go.opentelemetry.io/collector/featuregate"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/receiver"
@@ -37,23 +38,23 @@ import (
 
 // DataCollector emits metrics with CollectMetricData based on the Kubernetes API objects in the metadata store.
 type DataCollector struct {
-	settings                 receiver.Settings
-	metadataStore            *metadata.Store
-	nodeConditionsToReport   []string
-	allocatableTypesToReport []string
-	metricsBuilder           *metadata.MetricsBuilder
+	settings                    receiver.Settings
+	metadataStore               *metadata.Store
+	nodeConditionsToReport      []string
+	allocatableTypesToReport    []string
+	metricsBuilder              *metadata.MetricsBuilder
+	enableNewAllocatableMetrics *featuregate.Gate
 }
 
 // NewDataCollector returns a DataCollector.
-func NewDataCollector(set receiver.Settings, ms *metadata.Store,
-	metricsBuilderConfig metadata.MetricsBuilderConfig, nodeConditionsToReport, allocatableTypesToReport []string,
-) *DataCollector {
+func NewDataCollector(set receiver.Settings, ms *metadata.Store, metricsBuilderConfig metadata.MetricsBuilderConfig, nodeConditionsToReport, allocatableTypesToReport []string, enableNewAllocatableMetrics *featuregate.Gate) *DataCollector {
 	return &DataCollector{
-		settings:                 set,
-		metadataStore:            ms,
-		nodeConditionsToReport:   nodeConditionsToReport,
-		allocatableTypesToReport: allocatableTypesToReport,
-		metricsBuilder:           metadata.NewMetricsBuilder(metricsBuilderConfig, set),
+		settings:                    set,
+		metadataStore:               ms,
+		nodeConditionsToReport:      nodeConditionsToReport,
+		allocatableTypesToReport:    allocatableTypesToReport,
+		metricsBuilder:              metadata.NewMetricsBuilder(metricsBuilderConfig, set),
+		enableNewAllocatableMetrics: enableNewAllocatableMetrics,
 	}
 }
 
@@ -66,11 +67,11 @@ func (dc *DataCollector) CollectMetricData(currentTime time.Time) pmetric.Metric
 	})
 	dc.metadataStore.ForEach(gvk.Node, func(o any) {
 		crm := node.CustomMetrics(dc.settings, dc.metricsBuilder.NewResourceBuilder(), o.(*corev1.Node),
-			dc.nodeConditionsToReport, dc.allocatableTypesToReport, ts)
+			dc.nodeConditionsToReport, dc.allocatableTypesToReport, ts, dc.enableNewAllocatableMetrics.IsEnabled())
 		if crm.ScopeMetrics().Len() > 0 {
 			crm.MoveTo(customRMs.AppendEmpty())
 		}
-		node.RecordMetrics(dc.metricsBuilder, o.(*corev1.Node), ts)
+		node.RecordMetrics(dc.metricsBuilder, o.(*corev1.Node), ts, dc.enableNewAllocatableMetrics.IsEnabled())
 	})
 	dc.metadataStore.ForEach(gvk.Namespace, func(o any) {
 		namespace.RecordMetrics(dc.metricsBuilder, o.(*corev1.Namespace), ts)

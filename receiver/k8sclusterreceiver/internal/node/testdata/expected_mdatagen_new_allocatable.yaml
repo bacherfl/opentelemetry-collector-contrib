@@ -1,0 +1,87 @@
+resourceMetrics:
+  - resource:
+      attributes:
+        - key: k8s.node.name
+          value:
+            stringValue: test-node-1
+        - key: k8s.node.uid
+          value:
+            stringValue: test-node-1-uid
+    schemaUrl: https://opentelemetry.io/schemas/1.18.0
+    scopeMetrics:
+      - metrics:
+          - description: Amount of cpu allocatable on the node
+            name: k8s.node.allocatable.cpu
+            sum:
+              dataPoints:
+                - asDouble: 0.123
+                  startTimeUnixNano: "2000000"
+                  timeUnixNano: "1000000"
+            unit: '{cpu}'
+          - description: Amount of ephemeral-storage allocatable on the node
+            name: k8s.node.allocatable.ephemeral_storage
+            sum:
+              dataPoints:
+                - asInt: "1234"
+                  startTimeUnixNano: "2000000"
+                  timeUnixNano: "1000000"
+            unit: By
+          - description: Amount of memory allocatable on the node
+            name: k8s.node.allocatable.memory
+            sum:
+              dataPoints:
+                - asInt: "456"
+                  startTimeUnixNano: "2000000"
+                  timeUnixNano: "1000000"
+            unit: By
+          - description: Amount of pods allocatable on the node
+            name: k8s.node.allocatable.pods
+            sum:
+              dataPoints:
+                - asInt: "12"
+                  startTimeUnixNano: "2000000"
+                  timeUnixNano: "1000000"
+            unit: '{pod}'
+          - description: The condition of a particular Node.
+            gauge:
+              dataPoints:
+                - asInt: "0"
+                  attributes:
+                    - key: condition
+                      value:
+                        stringValue: DiskPressure
+                  startTimeUnixNano: "2000000"
+                  timeUnixNano: "1000000"
+                - asInt: "0"
+                  attributes:
+                    - key: condition
+                      value:
+                        stringValue: MemoryPressure
+                  startTimeUnixNano: "2000000"
+                  timeUnixNano: "1000000"
+                - asInt: "0"
+                  attributes:
+                    - key: condition
+                      value:
+                        stringValue: NetworkUnavailable
+                  startTimeUnixNano: "2000000"
+                  timeUnixNano: "1000000"
+                - asInt: "0"
+                  attributes:
+                    - key: condition
+                      value:
+                        stringValue: PIDPressure
+                  startTimeUnixNano: "2000000"
+                  timeUnixNano: "1000000"
+                - asInt: "1"
+                  attributes:
+                    - key: condition
+                      value:
+                        stringValue: Ready
+                  startTimeUnixNano: "2000000"
+                  timeUnixNano: "1000000"
+            name: k8s.node.condition
+            unit: '{condition}'
+        scope:
+          name: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/k8sclusterreceiver
+          version: latest

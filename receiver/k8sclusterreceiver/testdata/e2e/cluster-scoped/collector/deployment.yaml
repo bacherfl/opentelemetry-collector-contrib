@@ -21,7 +21,8 @@ spec:
           command:
             - /otelcontribcol
             - --config=/conf/relay.yaml
-          image: "otelcontribcol:latest"
+            - --feature-gates receiver.k8scluster.enableNewAllocatableMetrics
+          image: "localhost/otelcontribcol:e2e-test"
           imagePullPolicy: Never
           ports:
             - name: otlp

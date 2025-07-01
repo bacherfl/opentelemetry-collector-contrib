@@ -1,0 +1,51 @@
+resourceMetrics:
+  - resource:
+      attributes:
+        - key: k8s.node.name
+          value:
+            stringValue: test-node-1
+        - key: k8s.node.uid
+          value:
+            stringValue: test-node-1-uid
+    schemaUrl: https://opentelemetry.io/schemas/1.18.0
+    scopeMetrics:
+      - metrics:
+          - description: Ready condition status of the node (true=1, false=0, unknown=-1)
+            gauge:
+              dataPoints:
+                - asInt: "1"
+                  timeUnixNano: "1000000"
+            name: k8s.node.condition_ready
+          - description: MemoryPressure condition status of the node (true=1, false=0, unknown=-1)
+            gauge:
+              dataPoints:
+                - asInt: "0"
+                  timeUnixNano: "1000000"
+            name: k8s.node.condition_memory_pressure
+          - description: DiskPressure condition status of the node (true=1, false=0, unknown=-1)
+            gauge:
+              dataPoints:
+                - asInt: "0"
+                  timeUnixNano: "1000000"
+            name: k8s.node.condition_disk_pressure
+          - description: NetworkUnavailable condition status of the node (true=1, false=0, unknown=-1)
+            gauge:
+              dataPoints:
+                - asInt: "0"
+                  timeUnixNano: "1000000"
+            name: k8s.node.condition_network_unavailable
+          - description: PIDPressure condition status of the node (true=1, false=0, unknown=-1)
+            gauge:
+              dataPoints:
+                - asInt: "0"
+                  timeUnixNano: "1000000"
+            name: k8s.node.condition_pid_pressure
+          - description: OutOfDisk condition status of the node (true=1, false=0, unknown=-1)
+            gauge:
+              dataPoints:
+                - asInt: "-1"
+                  timeUnixNano: "1000000"
+            name: k8s.node.condition_out_of_disk
+        scope:
+          name: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/k8sclusterreceiver
+          version: latest

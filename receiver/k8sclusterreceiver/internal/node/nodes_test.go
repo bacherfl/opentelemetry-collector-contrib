@@ -28,31 +28,62 @@ import (
 func TestNodeMetricsReportCPUMetrics(t *testing.T) {
 	n := testutils.NewNode("1")
 	rb := metadata.NewResourceBuilder(metadata.DefaultResourceAttributesConfig())
-	rm := CustomMetrics(receivertest.NewNopSettings(metadata.Type), rb, n,
-		[]string{
-			"Ready",
-			"MemoryPressure",
-			"DiskPressure",
-			"NetworkUnavailable",
-			"PIDPressure",
-			"OutOfDisk",
-		},
-		[]string{
-			"cpu",
-			"memory",
-			"ephemeral-storage",
-			"storage",
-			"pods",
-			"hugepages-1Gi",
-			"hugepages-2Mi",
-			"not-present",
-		},
-		pcommon.Timestamp(time.Now().UnixNano()),
-	)
+	rm := CustomMetrics(receivertest.NewNopSettings(metadata.Type), rb, n, []string{
+		"Ready",
+		"MemoryPressure",
+		"DiskPressure",
+		"NetworkUnavailable",
+		"PIDPressure",
+		"OutOfDisk",
+	}, []string{
+		"cpu",
+		"memory",
+		"ephemeral-storage",
+		"storage",
+		"pods",
+		"hugepages-1Gi",
+		"hugepages-2Mi",
+		"not-present",
+	}, pcommon.Timestamp(time.Now().UnixNano()), false)
 	m := pmetric.NewMetrics()
 	rm.MoveTo(m.ResourceMetrics().AppendEmpty())
 
 	expected, err := golden.ReadMetrics(filepath.Join("testdata", "expected.yaml"))
+	require.NoError(t, err)
+	require.NoError(t, pmetrictest.CompareMetrics(expected, m,
+		pmetrictest.IgnoreTimestamp(),
+		pmetrictest.IgnoreStartTimestamp(),
+		pmetrictest.IgnoreResourceMetricsOrder(),
+		pmetrictest.IgnoreMetricsOrder(),
+		pmetrictest.IgnoreScopeMetricsOrder(),
+	),
+	)
+}
+
+func TestNodeMetricsReportCPUMetricsNoAllocatableMetrics(t *testing.T) {
+	n := testutils.NewNode("1")
+	rb := metadata.NewResourceBuilder(metadata.DefaultResourceAttributesConfig())
+	rm := CustomMetrics(receivertest.NewNopSettings(metadata.Type), rb, n, []string{
+		"Ready",
+		"MemoryPressure",
+		"DiskPressure",
+		"NetworkUnavailable",
+		"PIDPressure",
+		"OutOfDisk",
+	}, []string{
+		"cpu",
+		"memory",
+		"ephemeral-storage",
+		"storage",
+		"pods",
+		"hugepages-1Gi",
+		"hugepages-2Mi",
+		"not-present",
+	}, pcommon.Timestamp(time.Now().UnixNano()), true)
+	m := pmetric.NewMetrics()
+	rm.MoveTo(m.ResourceMetrics().AppendEmpty())
+
+	expected, err := golden.ReadMetrics(filepath.Join("testdata", "expected_custom_no_allocatable.yaml"))
 	require.NoError(t, err)
 	require.NoError(t, pmetrictest.CompareMetrics(expected, m,
 		pmetrictest.IgnoreTimestamp(),
@@ -74,15 +105,10 @@ func TestNodeOptionalMetrics(t *testing.T) {
 	rac.OsDescription.Enabled = true
 
 	rb := metadata.NewResourceBuilder(rac)
-	rm := CustomMetrics(receivertest.NewNopSettings(metadata.Type), rb, n,
-		[]string{},
-		[]string{
-			"cpu",
-			"memory",
-		},
-
-		pcommon.Timestamp(time.Now().UnixNano()),
-	)
+	rm := CustomMetrics(receivertest.NewNopSettings(metadata.Type), rb, n, []string{}, []string{
+		"cpu",
+		"memory",
+	}, pcommon.Timestamp(time.Now().UnixNano()), false)
 	m := pmetric.NewMetrics()
 	rm.MoveTo(m.ResourceMetrics().AppendEmpty())
 
@@ -171,10 +197,34 @@ func TestNodeMetrics(t *testing.T) {
 	mbc := metadata.DefaultMetricsBuilderConfig()
 	mbc.Metrics.K8sNodeCondition.Enabled = true
 	mb := metadata.NewMetricsBuilder(mbc, receivertest.NewNopSettings(metadata.Type))
-	RecordMetrics(mb, n, ts)
+	RecordMetrics(mb, n, ts, false)
 	m := mb.Emit()
 
 	expectedFile := filepath.Join("testdata", "expected_mdatagen.yaml")
+	expected, err := golden.ReadMetrics(expectedFile)
+	require.NoError(t, err)
+	require.NoError(t, pmetrictest.CompareMetrics(expected, m,
+		pmetrictest.IgnoreTimestamp(),
+		pmetrictest.IgnoreStartTimestamp(),
+		pmetrictest.IgnoreResourceMetricsOrder(),
+		pmetrictest.IgnoreMetricsOrder(),
+		pmetrictest.IgnoreScopeMetricsOrder(),
+		pmetrictest.IgnoreMetricDataPointsOrder(),
+	),
+	)
+}
+
+func TestNodeMetricsNewAllocatableMetrics(t *testing.T) {
+	n := testutils.NewNode("1")
+
+	ts := pcommon.Timestamp(time.Now().UnixNano())
+	mbc := metadata.DefaultMetricsBuilderConfig()
+	mbc.Metrics.K8sNodeCondition.Enabled = true
+	mb := metadata.NewMetricsBuilder(mbc, receivertest.NewNopSettings(metadata.Type))
+	RecordMetrics(mb, n, ts, true)
+	m := mb.Emit()
+
+	expectedFile := filepath.Join("testdata", "expected_mdatagen_new_allocatable.yaml")
 	expected, err := golden.ReadMetrics(expectedFile)
 	require.NoError(t, err)
 	require.NoError(t, pmetrictest.CompareMetrics(expected, m,

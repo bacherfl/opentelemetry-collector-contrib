@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/featuregate"
 	"go.opentelemetry.io/collector/receiver"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/k8sconfig"
@@ -23,6 +24,17 @@ const (
 	defaultCollectionInterval         = 10 * time.Second
 	defaultDistribution               = distributionKubernetes
 	defaultMetadataCollectionInterval = 5 * time.Minute
+
+	enableNewAllocatableMetricsFeatureFlag = "receiver.k8scluster.enableNewAllocatableMetrics"
+)
+
+var EnableNewAllocatableMetrics = featuregate.GlobalRegistry().MustRegister(
+	enableNewAllocatableMetricsFeatureFlag,
+	featuregate.StageBeta,
+	featuregate.WithRegisterDescription("When enabled the k8s.node.allocatable.cpu, k8s.node.allocatable.ephemeral_storage, k8s.node.allocatable.pods and k8s.node.allocatable.memory metrics will be represented by updown counters instead of gauges"),
+	// TODO this version may need to be updated, depending on when this PR will get merged
+	featuregate.WithRegisterFromVersion("v0.128.0"),
+	featuregate.WithRegisterReferenceURL("https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/40708"),
 )
 
 var defaultNodeConditionsToReport = []string{"Ready"}

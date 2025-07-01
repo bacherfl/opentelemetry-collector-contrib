@@ -221,7 +221,7 @@ func newReceiver(_ context.Context, set receiver.Settings, cfg component.Config)
 	ms := metadata.NewStore()
 	return &kubernetesReceiver{
 		dataCollector: collection.NewDataCollector(set, ms, rCfg.MetricsBuilderConfig,
-			rCfg.NodeConditionTypesToReport, rCfg.AllocatableTypesToReport),
+			rCfg.NodeConditionTypesToReport, rCfg.AllocatableTypesToReport, EnableNewAllocatableMetrics),
 		resourceWatcher: newResourceWatcher(set, rCfg, ms),
 		settings:        set,
 		config:          rCfg,
