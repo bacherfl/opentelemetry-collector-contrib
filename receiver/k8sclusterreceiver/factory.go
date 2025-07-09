@@ -28,6 +28,7 @@ const (
 	enableNewAllocatableMetricsFeatureFlag = "receiver.k8scluster.enableNewAllocatableMetrics"
 )
 
+// TODO this flag specifically for the new allocatable metrics will likely need to be replaced with the general flag (see https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/40708#issuecomment-3027128817) related to implementing the stable semantic conventions
 var EnableNewAllocatableMetrics = featuregate.GlobalRegistry().MustRegister(
 	enableNewAllocatableMetricsFeatureFlag,
 	featuregate.StageBeta,
